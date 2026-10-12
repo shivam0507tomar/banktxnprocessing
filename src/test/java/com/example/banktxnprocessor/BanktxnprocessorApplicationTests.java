@@ -1,11 +1,14 @@
 package com.example.banktxnprocessor;
 
+import com.example.banktxnprocessor.exception.AccountAlreadyExistsException;
+import com.example.banktxnprocessor.exception.AccountNotFoundException;
+import com.example.banktxnprocessor.exception.InsufficientFundsException;
+import com.example.banktxnprocessor.exception.InvalidAmountException;
 import com.example.banktxnprocessor.repository.AccountRepository;
 import com.example.banktxnprocessor.service.BankingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
-
 import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -48,7 +51,7 @@ class BanktxnprocessorApplicationTests {
 		service.deposit("A1", money("50.00"));
 		int entriesBefore = service.getHistory("A1").size();
 
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InsufficientFundsException.class,
 				() -> service.withdraw("A1", money("60.00")));
 
 		assertEquals(0,
@@ -59,7 +62,7 @@ class BanktxnprocessorApplicationTests {
 
 	@Test
 	void zeroDepositIsRejected() {
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidAmountException.class,
 				() -> service.deposit("A1", money("0")));
 
 		assertEquals(0,
@@ -92,7 +95,7 @@ class BanktxnprocessorApplicationTests {
 	void transferWithInsufficientFundsChangesNeitherAccount() {
 		service.deposit("A1", money("20.00"));
 
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InsufficientFundsException.class,
 				() -> service.transfer("A1", "A2", money("30.00")));
 
 		assertEquals(0,
@@ -117,4 +120,57 @@ class BanktxnprocessorApplicationTests {
 						.compareTo(money("100.00")));
 		assertEquals(1, service.getHistory("A1").size());
 	}
+
+	@Test
+	void duplicateAccountIdIsRejected() {
+		assertThrows(
+				AccountAlreadyExistsException.class,
+				() -> service.createAccount("A1"));
+	}
+	@Test
+	void missingAccountIsRejected() {
+		assertThrows(
+				AccountNotFoundException.class,
+				() -> service.getBalance("UNKNOWN"));
+	}
+
+	@Test
+	void negativeDepositIsRejected() {
+		assertThrows(
+				InvalidAmountException.class,
+				() -> service.deposit("A1", money("-10.00")));
+
+		assertEquals(0,
+				service.getBalance("A1").compareTo(money("0.00")));
+
+		assertTrue(service.getHistory("A1").isEmpty());
+	}
+
+	@Test
+	void missingDestinationDoesNotChangeSourceAccount() {
+		service.deposit("A1", money("100.00"));
+
+		assertThrows(
+				AccountNotFoundException.class,
+				() -> service.transfer(
+						"A1", "UNKNOWN", money("25.00")));
+
+		assertEquals(0,
+				service.getBalance("A1").compareTo(money("100.00")));
+
+		assertEquals(1, service.getHistory("A1").size());
+	}
+
+	@Test
+	void amountWithMoreThanTwoDecimalPlacesIsRejected() {
+		assertThrows(
+				InvalidAmountException.class,
+				() -> service.deposit("A1", money("10.999")));
+
+		assertEquals(0,
+				service.getBalance("A1").compareTo(money("0.00")));
+
+		assertTrue(service.getHistory("A1").isEmpty());
+	}
+
 }

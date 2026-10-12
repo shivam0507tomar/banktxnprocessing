@@ -5,8 +5,11 @@ import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
 
 public record AmountRequest(
-        @NotNull
-        @DecimalMin(value = "0.00", inclusive = false)
+        @NotNull(message = "Amount is required")
+        @DecimalMin(
+                value = "0",
+                inclusive = false,
+                message = "Amount must be greater than zero")
         BigDecimal amount
 ) {}
 

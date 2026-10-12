@@ -55,10 +55,21 @@ public class AccountController {
         return Map.of("status", "WITHDRAWAL_COMPLETED");
     }
 
+
     public record TransferRequest(
+            @jakarta.validation.constraints.NotBlank
             String fromAccountId,
+
+            @jakarta.validation.constraints.NotBlank
             String toAccountId,
-            java.math.BigDecimal amount) {}
+
+            @jakarta.validation.constraints.NotNull
+            @jakarta.validation.constraints.DecimalMin(
+                    value = "0",
+                    inclusive = false)
+            java.math.BigDecimal amount
+    ) {}
+
 
     @PostMapping("/transfers")
     public Map<String, String> transfer(

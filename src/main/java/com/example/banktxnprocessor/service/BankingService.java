@@ -1,11 +1,14 @@
 package com.example.banktxnprocessor.service;
 
+import com.example.banktxnprocessor.exception.AccountAlreadyExistsException;
+import com.example.banktxnprocessor.exception.AccountNotFoundException;
+import com.example.banktxnprocessor.exception.InsufficientFundsException;
+import com.example.banktxnprocessor.exception.InvalidAmountException;
 import com.example.banktxnprocessor.model.Account;
 import com.example.banktxnprocessor.model.LedgerEntry;
 import com.example.banktxnprocessor.model.TransactionType;
 import com.example.banktxnprocessor.repository.AccountRepository;
 import org.springframework.stereotype.Service;
-
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -29,8 +32,7 @@ public class BankingService {
         Account account = new Account(id);
 
         if (!repository.createIfAbsent(account)) {
-            throw new IllegalArgumentException(
-                    "Account already exists: " + id);
+            throw new AccountAlreadyExistsException(id);
         }
 
         return account;
@@ -49,31 +51,38 @@ public class BankingService {
             String accountId, BigDecimal amount) {
 
         validateAmount(amount);
+
         Account account = getAccount(accountId);
-
         BigDecimal newBalance = account.getBalance().add(amount);
-        account.updateBalance(newBalance);
 
-        record(account, TransactionType.DEPOSIT, amount,
-                newBalance, null, null);
+        LedgerEntry entry = createEntry(
+                account, TransactionType.DEPOSIT,
+                amount, newBalance, null, null, Instant.now());
+
+        account.updateBalance(newBalance);
+        account.addLedgerEntry(entry);
     }
 
     public synchronized void withdraw(
             String accountId, BigDecimal amount) {
 
         validateAmount(amount);
+
         Account account = getAccount(accountId);
 
         if (account.getBalance().compareTo(amount) < 0) {
-            throw new IllegalArgumentException(
-                    "Insufficient funds");
+            throw new InsufficientFundsException();
         }
 
-        BigDecimal newBalance = account.getBalance().subtract(amount);
-        account.updateBalance(newBalance);
+        BigDecimal newBalance =
+                account.getBalance().subtract(amount);
 
-        record(account, TransactionType.WITHDRAWAL, amount,
-                newBalance, null, null);
+        LedgerEntry entry = createEntry(
+                account, TransactionType.WITHDRAWAL,
+                amount, newBalance, null, null, Instant.now());
+
+        account.updateBalance(newBalance);
+        account.addLedgerEntry(entry);
     }
 
     public synchronized void transfer(
@@ -81,64 +90,78 @@ public class BankingService {
 
         validateAmount(amount);
 
+        if (fromId == null || toId == null
+                || fromId.isBlank() || toId.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Source and destination IDs are required");
+        }
+
         if (fromId.equals(toId)) {
             throw new IllegalArgumentException(
                     "Source and destination must differ");
         }
 
+        // Find both accounts before changing either balance.
         Account source = getAccount(fromId);
         Account destination = getAccount(toId);
 
         if (source.getBalance().compareTo(amount) < 0) {
-            throw new IllegalArgumentException(
-                    "Insufficient funds");
+            throw new InsufficientFundsException();
         }
 
-        // Validate everything before mutating either account.
         BigDecimal sourceBalance =
                 source.getBalance().subtract(amount);
+
         BigDecimal destinationBalance =
                 destination.getBalance().add(amount);
 
         UUID transferId = UUID.randomUUID();
         Instant timestamp = Instant.now();
 
+        // Prepare both ledger entries before changing state.
+        LedgerEntry debit = createEntry(
+                source, TransactionType.TRANSFER_OUT,
+                amount, sourceBalance, transferId,
+                toId, timestamp);
+
+        LedgerEntry credit = createEntry(
+                destination, TransactionType.TRANSFER_IN,
+                amount, destinationBalance, transferId,
+                fromId, timestamp);
+
+        // Apply both changes within the synchronized operation.
         source.updateBalance(sourceBalance);
         destination.updateBalance(destinationBalance);
 
-        record(source, TransactionType.TRANSFER_OUT, amount,
-                sourceBalance, transferId, toId, timestamp);
-
-        record(destination, TransactionType.TRANSFER_IN, amount,
-                destinationBalance, transferId, fromId, timestamp);
+        source.addLedgerEntry(debit);
+        destination.addLedgerEntry(credit);
     }
 
     private Account getAccount(String id) {
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Account ID must not be blank");
+        }
+
         return repository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Account not found: " + id));
+                .orElseThrow(
+                        () -> new AccountNotFoundException(id));
     }
 
     private void validateAmount(BigDecimal amount) {
         if (amount == null || amount.signum() <= 0) {
-            throw new IllegalArgumentException(
+            throw new InvalidAmountException(
                     "Amount must be greater than zero");
+        }
+
+        // This kata assumes amounts are expressed to 2 decimal places.
+        if (amount.stripTrailingZeros().scale() > 2) {
+            throw new InvalidAmountException(
+                    "Amount must have at most 2 decimal places");
         }
     }
 
-    private void record(
-            Account account,
-            TransactionType type,
-            BigDecimal amount,
-            BigDecimal balanceAfter,
-            UUID transferId,
-            String relatedAccountId) {
-
-        record(account, type, amount, balanceAfter,
-                transferId, relatedAccountId, Instant.now());
-    }
-
-    private void record(
+    private LedgerEntry createEntry(
             Account account,
             TransactionType type,
             BigDecimal amount,
@@ -147,7 +170,7 @@ public class BankingService {
             String relatedAccountId,
             Instant timestamp) {
 
-        account.addLedgerEntry(new LedgerEntry(
+        return new LedgerEntry(
                 UUID.randomUUID(),
                 transferId,
                 account.getId(),
@@ -155,7 +178,6 @@ public class BankingService {
                 amount,
                 balanceAfter,
                 timestamp,
-                relatedAccountId
-        ));
+                relatedAccountId);
     }
 }
